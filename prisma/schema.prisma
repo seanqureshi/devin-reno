@@ -1,0 +1,246 @@
+// Renovation Planner data model.
+// Money is stored as integer cents (Int). Enum-like fields are Strings; allowed
+// values live in src/lib/constants.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  memberships     ProjectMember[]
+  invitesSent     Invite[]        @relation("InvitedBy")
+  expensesCreated Expense[]       @relation("ExpenseCreatedBy")
+  expensesDecided Expense[]       @relation("ExpenseApprovedBy")
+  receipts        Receipt[]
+}
+
+model Project {
+  id                     String    @id @default(cuid())
+  name                   String
+  address                String?
+  description            String?
+  startDate              DateTime?
+  targetEndDate          DateTime?
+  contingencyCents       Int       @default(0) // contingency fund, separate from room budgets
+  approvalThresholdCents Int       @default(100000) // expenses >= this need partner/owner approval
+  createdAt              DateTime  @default(now())
+
+  members     ProjectMember[]
+  invites     Invite[]
+  rooms       Room[]
+  budgetLines BudgetLine[]
+  contractors Contractor[]
+  tasks       Task[]
+  quotes      Quote[]
+  expenses    Expense[]
+  receipts    Receipt[]
+}
+
+model ProjectMember {
+  id           String   @id @default(cuid())
+  projectId    String
+  userId       String
+  role         String // OWNER | PARTNER | CONTRACTOR
+  contractorId String? // set for CONTRACTOR members: which contractor company they act for
+  createdAt    DateTime @default(now())
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contractor Contractor? @relation(fields: [contractorId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, userId])
+}
+
+model Invite {
+  id           String    @id @default(cuid())
+  projectId    String
+  email        String
+  role         String // PARTNER | CONTRACTOR
+  contractorId String?
+  token        String    @unique
+  status       String    @default("PENDING") // PENDING | ACCEPTED | REVOKED
+  invitedById  String
+  createdAt    DateTime  @default(now())
+  acceptedAt   DateTime?
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invitedBy  User        @relation("InvitedBy", fields: [invitedById], references: [id])
+  contractor Contractor? @relation(fields: [contractorId], references: [id], onDelete: SetNull)
+}
+
+model Room {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  budgetLines BudgetLine[]
+  tasks       Task[]
+  quotes      Quote[]
+  expenses    Expense[]
+}
+
+// Budget for one (room, category) cell. Room budget = sum over categories;
+// category budget = sum over rooms.
+model BudgetLine {
+  id          String @id @default(cuid())
+  projectId   String
+  roomId      String
+  category    String // LABOR | MATERIALS | FIXTURES | PERMITS
+  amountCents Int    @default(0)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  room    Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, category])
+}
+
+model Contractor {
+  id          String   @id @default(cuid())
+  projectId   String
+  companyName String
+  contactName String?
+  email       String?
+  phone       String?
+  trade       String? // e.g. Electrical, Plumbing, Tile
+  createdAt   DateTime @default(now())
+
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  members ProjectMember[]
+  invites Invite[]
+  tasks   Task[]
+  bids    Bid[]
+}
+
+model Task {
+  id           String    @id @default(cuid())
+  projectId    String
+  roomId       String
+  title        String
+  description  String?
+  status       String    @default("NOT_STARTED") // NOT_STARTED | IN_PROGRESS | BLOCKED | DONE
+  position     Float     @default(0) // order within (room, status) column; lower first
+  contractorId String?
+  quoteId      String? // job this task belongs to; the quote's selected bid covers it
+  startDate    DateTime?
+  dueDate      DateTime?
+  durationDays Int       @default(1)
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  project    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  room       Room             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  contractor Contractor?      @relation(fields: [contractorId], references: [id], onDelete: SetNull)
+  quote      Quote?           @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  dependsOn  TaskDependency[] @relation("TaskDependsOn")
+  dependents TaskDependency[] @relation("TaskDependents")
+}
+
+// taskId cannot start until dependsOnId is DONE.
+model TaskDependency {
+  id          String @id @default(cuid())
+  taskId      String
+  dependsOnId String
+
+  task      Task @relation("TaskDependsOn", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("TaskDependents", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnId])
+}
+
+// A job that contractors bid on (e.g. "Kitchen electrical rough-in").
+model Quote {
+  id            String   @id @default(cuid())
+  projectId     String
+  roomId        String
+  category      String   @default("LABOR") // budget category the awarded bid counts toward
+  title         String
+  description   String?
+  status        String   @default("OPEN") // OPEN | AWARDED
+  selectedBidId String?  @unique
+  createdAt     DateTime @default(now())
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  room        Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  bids        Bid[]   @relation("QuoteBids")
+  selectedBid Bid?    @relation("SelectedBid", fields: [selectedBidId], references: [id])
+  tasks       Task[]
+}
+
+model Bid {
+  id             String    @id @default(cuid())
+  quoteId        String
+  contractorId   String
+  amountCents    Int
+  timelineDays   Int?
+  startAvailable DateTime?
+  warrantyMonths Int?
+  includes       String? // scope notes / what's included
+  notes          String?
+  status         String    @default("SUBMITTED") // SUBMITTED | ACCEPTED | REJECTED
+  createdAt      DateTime  @default(now())
+
+  quote       Quote      @relation("QuoteBids", fields: [quoteId], references: [id], onDelete: Cascade)
+  selectedFor Quote?     @relation("SelectedBid")
+  contractor  Contractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  expenses    Expense[]
+}
+
+model Expense {
+  id              String    @id @default(cuid())
+  projectId       String
+  roomId          String?
+  category        String // LABOR | MATERIALS | FIXTURES | PERMITS
+  vendor          String
+  description     String?
+  amountCents     Int
+  date            DateTime
+  status          String    @default("APPROVED") // DRAFT | PENDING | APPROVED | REJECTED
+  fromContingency Boolean   @default(false) // paid out of the contingency fund
+  bidId           String? // payment against an awarded bid
+  receiptId       String?   @unique
+  createdById     String
+  approvedById    String?
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  room       Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  bid        Bid?     @relation(fields: [bidId], references: [id], onDelete: SetNull)
+  receipt    Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  createdBy  User     @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  approvedBy User?    @relation("ExpenseApprovedBy", fields: [approvedById], references: [id])
+}
+
+model Receipt {
+  id                String    @id @default(cuid())
+  projectId         String
+  filePath          String // path relative to /uploads
+  originalName      String?
+  mimeType          String?
+  ocrText           String?
+  parsedVendor      String?
+  parsedDate        DateTime?
+  parsedAmountCents Int?
+  uploadedById      String
+  createdAt         DateTime  @default(now())
+
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User     @relation(fields: [uploadedById], references: [id])
+  expense    Expense?
+}
