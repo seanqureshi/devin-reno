@@ -15,6 +15,7 @@ src/lib/
   permissions.ts           role -> capability matrix, canSeeTask()
   constants.ts             statuses, categories, roles + labels
   budget.ts                budget roll-up rules: computeBudgetSummary / getBudgetSummary  (single source of truth)
+  expenses.ts              spending approval rule: statusOnConfirm / canApproveExpense
   schedule.ts              computeBlockers / wouldCreateCycle
   money.ts dates.ts        formatting/parsing helpers
   api.ts                   withApi() error wrapper, parseBody(zod), json()

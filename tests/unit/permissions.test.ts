@@ -33,3 +33,13 @@ describe("schedule helpers", () => {
     expect(m.has("a")).toBe(false);
   });
 });
+
+import { canApproveExpense, statusOnConfirm } from "@/lib/expenses";
+describe("expense approval", () => {
+  it("requires approval at/above threshold by someone else", () => {
+    expect(statusOnConfirm(100000, 100000)).toBe("PENDING");
+    expect(statusOnConfirm(99999, 100000)).toBe("APPROVED");
+    expect(canApproveExpense({ createdById: "a", status: "PENDING" }, "a")).toBe(false);
+    expect(canApproveExpense({ createdById: "a", status: "PENDING" }, "b")).toBe(true);
+  });
+});
